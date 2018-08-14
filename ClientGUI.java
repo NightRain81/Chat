@@ -1,30 +1,26 @@
-package brains.lesson_1.hello;
+package gb.j2.chat.client;
 
-import sun.reflect.generics.tree.Tree;
+import gb.j2.network.SocketThread;
+import gb.j2.network.SocketThreadListener;
 
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.awt.event.KeyEvent;
-import java.awt.event.KeyListener;
-import java.io.*;
-import java.util.Scanner;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.net.Socket;
 
-public class ClientGUI extends JFrame implements ActionListener, Thread.UncaughtExceptionHandler {
-
-    InputStream in;
-    OutputStream out;
-
+public class ClientGUI extends JFrame implements ActionListener, Thread.UncaughtExceptionHandler, SocketThreadListener {
     private static final int WIDTH = 400;
     private static final int HEIGHT = 300;
 
-    private static final JTextArea log = new JTextArea();
+    private final JTextArea log = new JTextArea();
     private final JPanel panelTop = new JPanel(new GridLayout(2, 3));
     private final JTextField tfIPAddress = new JTextField("127.0.0.1");
     private final JTextField tfPort = new JTextField("8189");
     private final JCheckBox cbAlwaysOnTop = new JCheckBox("Alwayson top");
-    private final JTextField tfLogin = new JTextField("Alex");
+    private final JTextField tfLogin = new JTextField("ivan");
     private final JPasswordField tfPassword = new JPasswordField("123");
     private final JButton btnLogin = new JButton("Login");
 
@@ -34,8 +30,8 @@ public class ClientGUI extends JFrame implements ActionListener, Thread.Uncaught
     private final JButton btnSend = new JButton("Send");
 
     private final JList<String> userList = new JList<>();
-
-    private static String channel = "chat.txt";
+    private boolean shownIoErrors = false;
+    private SocketThread socketThread;
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(new Runnable() {
@@ -44,9 +40,6 @@ public class ClientGUI extends JFrame implements ActionListener, Thread.Uncaught
                 new ClientGUI();
             }
         });
-
-        print();
-
     }
 
     private ClientGUI() {
@@ -57,6 +50,7 @@ public class ClientGUI extends JFrame implements ActionListener, Thread.Uncaught
         setTitle("Chat Client");
 
         log.setEditable(false);
+        log.setLineWrap(true);
         JScrollPane scrollLog = new JScrollPane(log);
         JScrollPane scrollUsers = new JScrollPane(userList);
         String[] users = {"user1_with_an_exceptionally_long_nickname", "user2", "user3", "user4", "user5", "user6", "user7", "user8", "user9", "user10"};
@@ -65,7 +59,7 @@ public class ClientGUI extends JFrame implements ActionListener, Thread.Uncaught
         cbAlwaysOnTop.addActionListener(this);
         btnLogin.addActionListener(this);
         btnSend.addActionListener(this);
-        tfMessage.addKeyListener(keyLis);
+        tfMessage.addActionListener(this);
 
         panelTop.add(tfIPAddress);
         panelTop.add(tfPort);
@@ -100,70 +94,90 @@ public class ClientGUI extends JFrame implements ActionListener, Thread.Uncaught
     }
 
     @Override
-    public void actionPerformed(ActionEvent e){
+    public void actionPerformed(ActionEvent e) {
         Object src = e.getSource();
         if (src == cbAlwaysOnTop) {
-//            setAlwaysOnTop(!isAlwaysOnTop());
             setAlwaysOnTop(cbAlwaysOnTop.isSelected());
+        } else if (src == btnLogin || src == tfIPAddress || src == tfLogin || src == tfPassword || src == tfPort) {
+            connect();
+        } else if (src == btnSend || src == tfMessage) {
+            sendMessage();
         } else {
-     //       throw new RuntimeException("Unknown source: " + src);
-        }
-        if (src == btnSend){
-            send();
+            throw new RuntimeException("Unknown source: " + src);
         }
     }
 
-
-    public static void writ(String name, String txt) throws IOException {
-        PrintStream File = new PrintStream(new FileOutputStream(name, true));
-        File.write(txt.getBytes());
-        File.flush();
-        File.close();
-    }
-
-    public static String read (String name) throws IOException {
-        String msg="";
-        Scanner txt1 = new Scanner(new FileInputStream(name));
-        while (txt1.hasNext()) {
-            msg += txt1.nextLine()+"\n";
-        }
-        return msg;
-    }
-
-    public static void print (){
-        log.setText("");
+    private void connect() {
+        Socket socket = null;
         try {
-            log.insert(read(channel), 0);
-        } catch (FileNotFoundException e) {
-            System.out.println("File not found!");
+            socket = new Socket(tfIPAddress.getText(), Integer.parseInt(tfPort.getText()));
         } catch (IOException e) {
-            System.out.println("Writing failed!");
+            log.append("Exception: " + e.getMessage());
+        }
+        socketThread = new SocketThread(this, "Client thread", socket);
+    }
+
+    void sendMessage() {
+        String msg = tfMessage.getText();
+        String username = tfLogin.getText();
+        if ("".equals(msg)) return;
+        tfMessage.setText(null);
+        tfMessage.requestFocusInWindow();
+        putLog(String.format("%s: %s", username, msg));
+//        wrtMsgToLogFile(msg, username);
+        socketThread.sendString(username + ":" + msg);
+    }
+
+    private void wrtMsgToLogFile(String msg, String username) {
+        try (FileWriter out = new FileWriter("log.txt", true)) {
+            out.write(username + ": " + msg + "\n");
+            out.flush();
+        } catch (IOException e) {
+            if (!shownIoErrors) {
+                shownIoErrors = true;
+                JOptionPane.showMessageDialog(this, "File write error", "Exception", JOptionPane.ERROR_MESSAGE);
+            }
         }
     }
 
-    public void send () {
-        try {
-            writ("chat.txt",  tfLogin.getText() + ": " + tfMessage.getText()+"\n");
-        } catch (FileNotFoundException a) {
-            System.out.println("File not found!");
-        } catch (IOException a) {
-            System.out.println("Writing failed!");
-        }
-        print();
-        tfMessage.setText("");
+    private void putLog(String msg) {
+        if ("".equals(msg)) return;
+        SwingUtilities.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                log.append(msg + "\n");
+                log.setCaretPosition(log.getDocument().getLength());
+            }
+        });
     }
 
-    KeyListener keyLis = new KeyListener() {
-        @Override
-        public void keyTyped(KeyEvent e) { }
+    /**
+     * Socket Thread Events
+     * */
 
-        @Override
-        public void keyPressed(KeyEvent e) {
-            if(e.getKeyCode() == KeyEvent.VK_ENTER){send();}
-        }
+    @Override
+    public void onStartSocketThread(SocketThread thread, Socket socket) {
+        putLog("socket thread start");
+    }
 
-        @Override
-        public void keyReleased(KeyEvent e) {}
-    };
+    @Override
+    public void onStopSocketThread(SocketThread thread) {
+        putLog("socket thread stop");
+    }
+
+    @Override
+    public void onReceiveString(SocketThread thread, Socket socket, String msg) {
+        putLog(msg);
+    }
+
+    @Override
+    public void onSocketThreadIsReady(SocketThread thread, Socket socket) {
+        putLog("socket is ready");
+    }
+
+    @Override
+    public void onSocketThreadException(SocketThread thread, Exception e) {
+        putLog("socket thread exception");
+    }
+
 }
-
